@@ -28,7 +28,7 @@ esac
 
 for arch in $arches; do
   clang -fobjc-arc -fvisibility=hidden -O2 -I"${project}/Sources" \
-    '-DAPELIN_PACKAGE_ID="local.apelin.coolcharge"' \
+    '-DAPELIN_PACKAGE_ID="com.ilyastekdin.coolcharge"' \
     "-DAPELIN_BUILD_ID=\"${APELIN_BUILD_ID}\"" \
     -arch "$arch" -c "$project/Sources/Tweak.m" -o "$work/$arch.o"
   clang -dynamiclib -arch "$arch" "$work/$arch.o" \
@@ -54,7 +54,7 @@ cat > "$stage${APELIN_PREFIX}/Library/MobileSubstrate/DynamicLibraries/CoolCharg
 PLIST
 
 cat > "$stage/DEBIAN/control" <<CONTROL
-Package: local.apelin.coolcharge
+Package: com.ilyastekdin.coolcharge
 Name: CoolCharge
 Version: 0.1.0
 Architecture: ${APELIN_ARCHITECTURE}
