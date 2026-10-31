@@ -2,7 +2,7 @@
 
 An APT source for jailbroken iOS, published with Apelin.
 
-Add `https://eliastekdin.github.io/CoolCharge/` in Irisin.
+Add `https://eliastekdin.github.io/CoolCharge/` in Sileo or Irisin.
 
 ## How it works
 

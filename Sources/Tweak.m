@@ -97,13 +97,23 @@ static int gAppliedPriority = INT_MIN;
 static double gSessionStartedAt = 0.0;
 
 static double CCBatteryTemperature(void) {
-    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault,
-                                                       IOServiceMatching("AppleSmartBattery"));
+    typedef io_service_t (*CCIOServiceGetMatchingService)(mach_port_t, CFDictionaryRef);
+    typedef CFMutableDictionaryRef (*CCIOServiceMatching)(const char *);
+    typedef kern_return_t (*CCIORegistryEntryCreateCFProperties)(io_registry_entry_t, CFMutableDictionaryRef *, CFAllocatorRef, IOOptionBits);
+    typedef kern_return_t (*CCIOObjectRelease)(io_object_t);
+
+    CCIOServiceGetMatchingService getMatchingService = (CCIOServiceGetMatchingService)dlsym(RTLD_DEFAULT, "IOServiceGetMatchingService");
+    CCIOServiceMatching serviceMatching = (CCIOServiceMatching)dlsym(RTLD_DEFAULT, "IOServiceMatching");
+    CCIORegistryEntryCreateCFProperties createProperties = (CCIORegistryEntryCreateCFProperties)dlsym(RTLD_DEFAULT, "IORegistryEntryCreateCFProperties");
+    CCIOObjectRelease objectRelease = (CCIOObjectRelease)dlsym(RTLD_DEFAULT, "IOObjectRelease");
+    if (getMatchingService == NULL || serviceMatching == NULL || createProperties == NULL || objectRelease == NULL) return -1.0;
+
+    io_service_t service = getMatchingService(MACH_PORT_NULL, serviceMatching("AppleSmartBattery"));
     if (service == MACH_PORT_NULL) return -1.0;
 
     CFMutableDictionaryRef properties = NULL;
     double temperature = -1.0;
-    if (IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS && properties != NULL) {
+    if (createProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS && properties != NULL) {
         CFTypeRef value = CFDictionaryGetValue(properties, CFSTR("Temperature"));
         if (value == NULL) {
             CFTypeRef batteryData = CFDictionaryGetValue(properties, CFSTR("BatteryData"));
@@ -119,7 +129,7 @@ static double CCBatteryTemperature(void) {
         }
         CFRelease(properties);
     }
-    IOObjectRelease(service);
+    objectRelease(service);
     return temperature;
 }
 

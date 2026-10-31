@@ -86,12 +86,25 @@ ldid -S "$tweak_path"
 ldid -S "$prefs_path"
 chmod 0755 "$prefs_path"
 
+if [ "$APELIN_BOOTSTRAP" = roothide ]; then
+  ln -s ../DynamicPatches/AutoPatches.dylib \
+    "$stage${APELIN_PREFIX}/Library/MobileSubstrate/DynamicLibraries/CoolCharge.dylib.roothidepatch"
+fi
+
 cat > "$stage${APELIN_PREFIX}/Library/MobileSubstrate/DynamicLibraries/CoolCharge.plist" <<'PLIST'
-{
-    Filter = {
-        Bundles = ("com.apple.springboard");
-    };
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Filter</key>
+    <dict>
+        <key>Bundles</key>
+        <array>
+            <string>com.apple.springboard</string>
+        </array>
+    </dict>
+</dict>
+</plist>
 PLIST
 
 cp "$project/Resources/Info.plist" "$stage${APELIN_PREFIX}/Library/PreferenceBundles/CoolChargePrefs.bundle/Info.plist"
@@ -106,7 +119,7 @@ chmod 0644 \
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: com.ilyastekdin.coolcharge
 Name: CoolCharge
-Version: 0.1.1
+Version: 0.2.2
 Architecture: ${APELIN_ARCHITECTURE}
 Description: Cooperative thermal guard, charging telemetry, and live Settings preview for SpringBoard
 Section: Tweaks
