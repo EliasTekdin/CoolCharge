@@ -1,0 +1,13 @@
+{
+  "autoName": false,
+  "buildSystem": "external",
+  "displayName": "CoolCharge",
+  "kind": "workspace",
+  "projectID": "32fe1806-5ce8-44fa-a8ad-f22d5bcbd333",
+  "schemaVersion": 1,
+  "external": {
+    "script": "apelin/build.sh",
+    "interpreter": "sh",
+    "arguments": []
+  }
+}
