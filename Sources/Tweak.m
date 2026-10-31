@@ -24,12 +24,8 @@
 #define APELIN_BUILD_ID "development"
 #endif
 
-// IOKit's power-source declarations are not shipped in the iPhoneOS SDK, but
-// these are the stable C entry points exported by IOKit on iOS.
-typedef CFTypeRef (*CCIOPSCopyPowerSourcesInfo)(void);
-typedef CFArrayRef (*CCIOPSCopyPowerSourcesList)(CFTypeRef blob);
-typedef CFDictionaryRef (*CCIOPSGetPowerSourceDescription)(CFTypeRef blob, CFTypeRef source);
-typedef void (*CCIOPSReleasePowerSource)(CFTypeRef blob);
+// IOKit's power-source declarations are not shipped in the iPhoneOS SDK.
+// Charging state and percentage use UIKit; IOKit remains for battery temperature.
 
 static os_log_t CCLog(void) {
     static os_log_t log;
@@ -53,16 +49,7 @@ static double CCNumber(CFTypeRef value) {
     return 0.0;
 }
 
-static BOOL CCBool(CFTypeRef value) {
-    if (value == NULL) return NO;
-    if (CFGetTypeID(value) == CFBooleanGetTypeID()) {
-        return CFBooleanGetValue((CFBooleanRef)value);
-    }
-    if (CFGetTypeID(value) == CFNumberGetTypeID()) {
-        return CCNumber(value) != 0.0;
-    }
-    return NO;
-}
+
 
 typedef struct {
     BOOL charging;
@@ -163,31 +150,14 @@ static CCSnapshot CCCollectSnapshot(void) {
     result.lastSessionDuration = CCPreferenceDouble(state, @"lastSessionDuration", 0.0);
     result.temperature = CCBatteryTemperature();
 
-    CCIOPSCopyPowerSourcesInfo copyInfo = (CCIOPSCopyPowerSourcesInfo)dlsym(RTLD_DEFAULT, "IOPSCopyPowerSourcesInfo");
-    CCIOPSCopyPowerSourcesList copyList = (CCIOPSCopyPowerSourcesList)dlsym(RTLD_DEFAULT, "IOPSCopyPowerSourcesList");
-    CCIOPSGetPowerSourceDescription getDescription = (CCIOPSGetPowerSourceDescription)dlsym(RTLD_DEFAULT, "IOPSGetPowerSourceDescription");
-    CCIOPSReleasePowerSource releaseInfo = (CCIOPSReleasePowerSource)dlsym(RTLD_DEFAULT, "IOPSReleasePowerSource");
-    if (copyInfo == NULL || copyList == NULL || getDescription == NULL || releaseInfo == NULL) {
-        return result;
-    }
-
-    CFTypeRef info = copyInfo();
-    CFArrayRef sources = info == NULL ? NULL : copyList(info);
-    if (info != NULL && sources != NULL && CFArrayGetCount(sources) > 0) {
-        CFTypeRef source = CFArrayGetValueAtIndex(sources, 0);
-        CFDictionaryRef description = getDescription(info, source);
-        if (description != NULL) {
-            result.charging = CCBool(CFDictionaryGetValue(description, CFSTR("Is Charging")));
-            result.voltage = CCNumber(CFDictionaryGetValue(description, CFSTR("Voltage")));
-            result.amperage = CCNumber(CFDictionaryGetValue(description, CFSTR("Amperage")));
-            result.percent = CCNumber(CFDictionaryGetValue(description, CFSTR("Current Capacity")));
-            if (result.voltage > 100.0) result.voltage /= 1000.0;
-            if (result.amperage > 1000.0) result.amperage /= 1000.0;
-            result.watts = fabs(result.voltage * result.amperage);
-        }
-    }
-    if (sources != NULL) CFRelease(sources);
-    if (info != NULL) releaseInfo(info);
+    UIDevice *device = UIDevice.currentDevice;
+    BOOL wasMonitoring = device.batteryMonitoringEnabled;
+    device.batteryMonitoringEnabled = YES;
+    UIDeviceBatteryState batteryState = device.batteryState;
+    float batteryLevel = device.batteryLevel;
+    device.batteryMonitoringEnabled = wasMonitoring;
+    result.charging = batteryState == UIDeviceBatteryStateCharging || batteryState == UIDeviceBatteryStateFull;
+    if (batteryLevel >= 0.0f) result.percent = batteryLevel * 100.0;
 
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     NSTimeInterval wallNow = [NSDate date].timeIntervalSince1970;
@@ -364,9 +334,11 @@ static const char gWidgetAssociationKey;
 typedef void (*CCViewDidAppearIMP)(id, SEL, BOOL);
 static CCViewDidAppearIMP gOriginalBaseViewDidAppear;
 static CCViewDidAppearIMP gOriginalLockViewDidAppear;
+static CCViewDidAppearIMP gOriginalDashBoardViewDidAppear;
 typedef void (*CCViewWillDisappearIMP)(id, SEL, BOOL);
 static CCViewWillDisappearIMP gOriginalBaseViewWillDisappear;
 static CCViewWillDisappearIMP gOriginalLockViewWillDisappear;
+static CCViewWillDisappearIMP gOriginalDashBoardViewWillDisappear;
 typedef void (*CCMSHookMessageEx)(Class, SEL, IMP, IMP *);
 
 static void CCAttachWidget(id controller) {
@@ -417,6 +389,17 @@ static void HookedLockViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     widget.hidden = YES;
 }
 
+static void HookedDashBoardViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    if (gOriginalDashBoardViewDidAppear != NULL) gOriginalDashBoardViewDidAppear(self, _cmd, animated);
+    dispatch_async(dispatch_get_main_queue(), ^{ CCAttachWidget(self); });
+}
+
+static void HookedDashBoardViewWillDisappear(id self, SEL _cmd, BOOL animated) {
+    if (gOriginalDashBoardViewWillDisappear != NULL) gOriginalDashBoardViewWillDisappear(self, _cmd, animated);
+    CCCoolChargeWidget *widget = objc_getAssociatedObject(self, &gWidgetAssociationKey);
+    widget.hidden = YES;
+}
+
 static void CCInstallHooks(void) {
     CCMSHookMessageEx hooker = (CCMSHookMessageEx)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
     if (hooker == NULL) {
@@ -435,7 +418,13 @@ static void CCInstallHooks(void) {
         hooker(lockView, @selector(viewWillDisappear:), (IMP)HookedLockViewWillDisappear, (IMP *)&gOriginalLockViewWillDisappear);
         os_log(CCLog(), "CoolCharge installed SBLockScreenViewController hooks");
     }
-    if (base == Nil && lockView == Nil) {
+    Class dashBoard = objc_getClass("SBDashBoardViewController");
+    if (dashBoard != Nil && dashBoard != base && dashBoard != lockView) {
+        hooker(dashBoard, @selector(viewDidAppear:), (IMP)HookedDashBoardViewDidAppear, (IMP *)&gOriginalDashBoardViewDidAppear);
+        hooker(dashBoard, @selector(viewWillDisappear:), (IMP)HookedDashBoardViewWillDisappear, (IMP *)&gOriginalDashBoardViewWillDisappear);
+        os_log(CCLog(), "CoolCharge installed SBDashBoardViewController hooks");
+    }
+    if (base == Nil && lockView == Nil && dashBoard == Nil) {
         os_log_error(CCLog(), "CoolCharge found no known Lock Screen controller class");
     }
 }
@@ -460,7 +449,7 @@ static void CCStartTelemetry(void) {
 }
 
 __attribute__((constructor)) static void CoolChargeInitialize(void) {
-    os_log(CCLog(), "ApelinLoaded %{public}s in %{public}s", APELIN_BUILD_ID, getprogname());
+    os_log_error(CCLog(), "ApelinLoaded %{public}s in %{public}s", APELIN_BUILD_ID, getprogname());
     if (objc_getClass("SpringBoard") == Nil) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         gWidgets = [NSHashTable weakObjectsHashTable];
