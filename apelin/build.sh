@@ -119,7 +119,7 @@ chmod 0644 \
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: com.ilyastekdin.coolcharge
 Name: CoolCharge
-Version: 0.2.2
+Version: 0.2.3
 Architecture: ${APELIN_ARCHITECTURE}
 Description: Cooperative thermal guard, charging telemetry, and live Settings preview for SpringBoard
 Section: Tweaks

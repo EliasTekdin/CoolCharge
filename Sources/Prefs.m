@@ -1,54 +1,23 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <IOKit/IOKitLib.h>
 #import <notify.h>
 #import <math.h>
-#import <dlfcn.h>
 #import <Preferences/PSListController.h>
 #import "CCSettings.h"
 
-static double CCPrefNumber(CFTypeRef value) {
-    if (value == NULL) return 0.0;
-    if (CFGetTypeID(value) == CFNumberGetTypeID()) {
-        double number = 0.0;
-        CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &number);
-        return number;
-    }
-    return 0.0;
-}
-
-typedef CFTypeRef (*CCPrefCopySourcesInfo)(void);
-typedef CFArrayRef (*CCPrefCopySourcesList)(CFTypeRef);
-typedef CFDictionaryRef (*CCPrefGetSourceDescription)(CFTypeRef, CFTypeRef);
-typedef void (*CCPrefReleaseSources)(CFTypeRef);
-
 static BOOL CCPrefCharging(double *watts, double *percent) {
     if (watts != NULL) *watts = 0.0;
-    if (percent != NULL) *percent = 0.0;
-    CCPrefCopySourcesInfo copyInfo = (CCPrefCopySourcesInfo)dlsym(RTLD_DEFAULT, "IOPSCopyPowerSourcesInfo");
-    CCPrefCopySourcesList copyList = (CCPrefCopySourcesList)dlsym(RTLD_DEFAULT, "IOPSCopyPowerSourcesList");
-    CCPrefGetSourceDescription getDescription = (CCPrefGetSourceDescription)dlsym(RTLD_DEFAULT, "IOPSGetPowerSourceDescription");
-    CCPrefReleaseSources releaseInfo = (CCPrefReleaseSources)dlsym(RTLD_DEFAULT, "IOPSReleasePowerSource");
-    if (copyInfo == NULL || copyList == NULL || getDescription == NULL || releaseInfo == NULL) return NO;
-    CFTypeRef info = copyInfo();
-    CFArrayRef sources = info == NULL ? NULL : copyList(info);
-    BOOL charging = NO;
-    if (info != NULL && sources != NULL && CFArrayGetCount(sources) > 0) {
-        CFDictionaryRef description = getDescription(info, CFArrayGetValueAtIndex(sources, 0));
-        if (description != NULL) {
-            CFTypeRef chargingValue = CFDictionaryGetValue(description, CFSTR("Is Charging"));
-            charging = chargingValue != NULL && CFGetTypeID(chargingValue) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)chargingValue);
-            double voltage = CCPrefNumber(CFDictionaryGetValue(description, CFSTR("Voltage")));
-            double amperage = CCPrefNumber(CFDictionaryGetValue(description, CFSTR("Amperage")));
-            if (voltage > 100.0) voltage /= 1000.0;
-            if (amperage > 1000.0) amperage /= 1000.0;
-            if (watts != NULL) *watts = fabs(voltage * amperage);
-            if (percent != NULL) *percent = CCPrefNumber(CFDictionaryGetValue(description, CFSTR("Current Capacity")));
-        }
-    }
-    if (sources != NULL) CFRelease(sources);
-    if (info != NULL) releaseInfo(info);
-    return charging;
+    if (percent != NULL) *percent = -1.0;
+
+    UIDevice *device = UIDevice.currentDevice;
+    BOOL wasMonitoring = device.batteryMonitoringEnabled;
+    device.batteryMonitoringEnabled = YES;
+    UIDeviceBatteryState batteryState = device.batteryState;
+    float batteryLevel = device.batteryLevel;
+    device.batteryMonitoringEnabled = wasMonitoring;
+
+    if (percent != NULL && batteryLevel >= 0.0f) *percent = batteryLevel * 100.0;
+    return batteryState == UIDeviceBatteryStateCharging || batteryState == UIDeviceBatteryStateFull;
 }
 
 static NSString *CCPrefClock(double timestamp) {
@@ -123,9 +92,9 @@ static NSString *CCPrefDuration(double seconds) {
         _detailLabel.text = @"No thermal guard or Lock Screen widget";
     } else if (!showWidget) {
         _titleLabel.text = @"Lock Screen widget hidden";
-        _detailLabel.text = charging ? [NSString stringWithFormat:@"Charging • %.1f W • %.0f%%", watts, percent] : @"Not charging";
+        _detailLabel.text = charging ? [NSString stringWithFormat:@"Charging • %.0f%%", percent] : @"Not charging";
     } else if (charging) {
-        _titleLabel.text = [NSString stringWithFormat:@"CoolCharge preview • %.1f W • %.0f%%", watts, percent];
+        _titleLabel.text = percent >= 0.0 ? [NSString stringWithFormat:@"CoolCharge preview • %.0f%%", percent] : @"CoolCharge preview • Charging";
         double start = CCPreferenceDouble(state, @"sessionStart", 0.0);
         _detailLabel.text = showSessionTimes ? [NSString stringWithFormat:@"Charging now • Started %@", CCPrefClock(start)] : @"Charging now • live preview";
     } else {
