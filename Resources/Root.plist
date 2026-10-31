@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>title</key>
+    <string>CoolCharge</string>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Charging protection</string>
+            <key>footerText</key>
+            <string>CoolCharge adjusts SpringBoard's cooperative workload priority while charging. It never changes charging voltage or current.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Enabled</string>
+            <key>key</key>
+            <string>enabled</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Lock Screen widget</string>
+            <key>key</key>
+            <string>showLockScreenWidget</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Show charging session times</string>
+            <key>key</key>
+            <string>showSessionTimes</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Show temperature</string>
+            <key>key</key>
+            <string>showTemperature</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Keep session receipt after unplugging</string>
+            <key>key</key>
+            <string>showRecentSession</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Reset charging history</string>
+            <key>action</key>
+            <string>resetLearning:</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>footerText</key>
+            <string>Charging start and stop events are logged under com.ilyastekdin.coolcharge and the last session is retained for the live preview and Lock Screen receipt.</string>
+        </dict>
+    </array>
+</dict>
+</plist>

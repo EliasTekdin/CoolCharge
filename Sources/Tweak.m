@@ -14,9 +14,11 @@
 #import <errno.h>
 #import <math.h>
 #import <unistd.h>
+#import <notify.h>
+#import "CCSettings.h"
 
 #ifndef APELIN_PACKAGE_ID
-#define APELIN_PACKAGE_ID "local.apelin.coolcharge"
+#define APELIN_PACKAGE_ID "com.ilyastekdin.coolcharge"
 #endif
 #ifndef APELIN_BUILD_ID
 #define APELIN_BUILD_ID "development"
@@ -71,7 +73,17 @@ typedef struct {
     double temperature;
     double etaSeconds;
     double throttle;
+    double sessionStart;
+    double lastSessionStart;
+    double lastSessionStop;
+    double lastSessionDuration;
     BOOL etaValid;
+    BOOL enabled;
+    BOOL showWidget;
+    BOOL showSessionTimes;
+    BOOL showTemperature;
+    BOOL showRecentSession;
+    BOOL recentSession;
 } CCSnapshot;
 
 static CCSnapshot gSnapshot;
@@ -82,6 +94,7 @@ static BOOL gLastWasCharging = NO;
 static int gBasePriority = 0;
 static BOOL gBasePriorityCaptured = NO;
 static int gAppliedPriority = INT_MIN;
+static double gSessionStartedAt = 0.0;
 
 static double CCBatteryTemperature(void) {
     io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault,
@@ -110,8 +123,34 @@ static double CCBatteryTemperature(void) {
     return temperature;
 }
 
+static NSString *CCClockString(double timestamp) {
+    if (timestamp <= 0.0) return @"—";
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.timeStyle = NSDateFormatterShortStyle;
+    formatter.dateStyle = NSDateFormatterNoStyle;
+    return [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:timestamp]];
+}
+
+static NSString *CCDurationString(double seconds) {
+    if (seconds <= 0.0) return @"—";
+    NSInteger minutes = (NSInteger)ceil(seconds / 60.0);
+    if (minutes < 1) minutes = 1;
+    if (minutes < 60) return [NSString stringWithFormat:@"%ld min", (long)minutes];
+    return [NSString stringWithFormat:@"%ld h %ld min", (long)(minutes / 60), (long)(minutes % 60)];
+}
+
 static CCSnapshot CCCollectSnapshot(void) {
     CCSnapshot result = {0};
+    NSDictionary *state = CCReadCoolChargeState();
+    result.enabled = CCPreferenceBool(state, @"enabled", YES);
+    result.showWidget = CCPreferenceBool(state, @"showLockScreenWidget", YES);
+    result.showSessionTimes = CCPreferenceBool(state, @"showSessionTimes", YES);
+    result.showTemperature = CCPreferenceBool(state, @"showTemperature", YES);
+    result.showRecentSession = CCPreferenceBool(state, @"showRecentSession", YES);
+    result.sessionStart = CCPreferenceDouble(state, @"sessionStart", 0.0);
+    result.lastSessionStart = CCPreferenceDouble(state, @"lastSessionStart", 0.0);
+    result.lastSessionStop = CCPreferenceDouble(state, @"lastSessionStop", 0.0);
+    result.lastSessionDuration = CCPreferenceDouble(state, @"lastSessionDuration", 0.0);
     result.temperature = CCBatteryTemperature();
 
     CCIOPSCopyPowerSourcesInfo copyInfo = (CCIOPSCopyPowerSourcesInfo)dlsym(RTLD_DEFAULT, "IOPSCopyPowerSourcesInfo");
@@ -141,6 +180,42 @@ static CCSnapshot CCCollectSnapshot(void) {
     if (info != NULL) releaseInfo(info);
 
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    NSTimeInterval wallNow = [NSDate date].timeIntervalSince1970;
+    BOOL hadPersistedSession = result.sessionStart > 0.0;
+    if (result.charging) {
+        // Keep a session's original start across SpringBoard restarts. A
+        // restart must not manufacture a new charging start time or reset the
+        // duration shown in Settings and on the Lock Screen.
+        if (!hadPersistedSession) {
+            gSessionStartedAt = wallNow;
+            result.sessionStart = wallNow;
+            CCWriteCoolChargeState(@{ @"sessionStart": @(wallNow) });
+            NSString *clock = CCClockString(wallNow);
+            os_log(CCLog(), "Began Charging: %{public}s", clock.UTF8String);
+        } else {
+            gSessionStartedAt = result.sessionStart;
+        }
+    } else if ((gLastWasCharging || hadPersistedSession) && hadPersistedSession) {
+        double started = gSessionStartedAt > 0.0 ? gSessionStartedAt : result.sessionStart;
+        double duration = started > 0.0 ? fmax(0.0, wallNow - started) : 0.0;
+        result.lastSessionStart = started;
+        result.lastSessionStop = wallNow;
+        result.lastSessionDuration = duration;
+        result.sessionStart = 0.0;
+        gSessionStartedAt = 0.0;
+        CCWriteCoolChargeState(@{
+            @"sessionStart": @0.0,
+            @"lastSessionStart": @(started),
+            @"lastSessionStop": @(wallNow),
+            @"lastSessionDuration": @(duration)
+        });
+        NSString *startedClock = CCClockString(started);
+        NSString *stoppedClock = CCClockString(wallNow);
+        NSString *durationText = CCDurationString(duration);
+        os_log(CCLog(), "Stopped Charging: %{public}s (begun %{public}s, total %{public}s)",
+               stoppedClock.UTF8String, startedClock.UTF8String, durationText.UTF8String);
+    }
+    result.recentSession = !result.charging && result.showRecentSession && result.lastSessionStop > 0.0 && (wallNow - result.lastSessionStop) < 600.0;
     if (result.charging && gLastWasCharging && gLastSampleTime > 0.0) {
         double elapsed = now - gLastSampleTime;
         double delta = result.percent - gLastPercent;
@@ -189,7 +264,7 @@ static void CCApplyCooperativeThrottle(CCSnapshot snapshot) {
     if (!gBasePriorityCaptured) return;
 
     int desired = gBasePriority;
-    if (snapshot.charging) {
+    if (snapshot.charging && snapshot.enabled) {
         desired = gBasePriority + (int)ceil(snapshot.throttle * 10.0);
         if (desired > 19) desired = 19;
     }
@@ -253,15 +328,23 @@ static NSString *CCMinutes(double seconds) {
 }
 
 - (void)cc_update:(CCSnapshot)snapshot {
-    self.hidden = !snapshot.charging;
-    if (!snapshot.charging) return;
-    NSString *power = snapshot.watts > 0.05 ? [NSString stringWithFormat:@"%.1f W", snapshot.watts] : @"Power —";
-    NSString *capacity = [NSString stringWithFormat:@"%.0f%%", snapshot.percent];
-    _titleLabel.text = [NSString stringWithFormat:@"CoolCharge  •  %@  •  %@", power, capacity];
-    NSString *eta = snapshot.etaValid ? [NSString stringWithFormat:@"Full in %@", CCMinutes(snapshot.etaSeconds)] : @"Full-time estimate learning";
-    NSString *temperature = snapshot.temperature > 0.0 ? [NSString stringWithFormat:@"%.1f°C", snapshot.temperature] : @"temperature —";
-    _detailLabel.text = [NSString stringWithFormat:@"%@  •  %@", eta, temperature];
-    self.accessibilityLabel = [NSString stringWithFormat:@"Charging at %@, %@, %@", power, capacity, eta];
+    BOOL shouldShow = snapshot.enabled && snapshot.showWidget && (snapshot.charging || snapshot.recentSession);
+    self.hidden = !shouldShow;
+    if (!shouldShow) return;
+    if (snapshot.charging) {
+        NSString *power = snapshot.watts > 0.05 ? [NSString stringWithFormat:@"%.1f W", snapshot.watts] : @"Power —";
+        NSString *capacity = [NSString stringWithFormat:@"%.0f%%", snapshot.percent];
+        _titleLabel.text = [NSString stringWithFormat:@"CoolCharge  •  %@  •  %@", power, capacity];
+        NSString *eta = snapshot.etaValid ? [NSString stringWithFormat:@"Full in %@", CCMinutes(snapshot.etaSeconds)] : @"Full-time estimate learning";
+        NSString *temperature = snapshot.showTemperature && snapshot.temperature > 0.0 ? [NSString stringWithFormat:@"%.1f°C", snapshot.temperature] : @"temperature hidden";
+        NSString *session = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Started %@", CCClockString(snapshot.sessionStart)] : @"live charging";
+        _detailLabel.text = [NSString stringWithFormat:@"%@  •  %@  •  %@", eta, temperature, session];
+        self.accessibilityLabel = [NSString stringWithFormat:@"Charging at %@, %@, %@", power, capacity, eta];
+    } else {
+        _titleLabel.text = @"CoolCharge  •  Charge receipt";
+        _detailLabel.text = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Stopped %@  •  Charged %@", CCClockString(snapshot.lastSessionStop), CCDurationString(snapshot.lastSessionDuration)] : @"Charging session complete";
+        self.accessibilityLabel = _detailLabel.text;
+    }
 }
 @end
 
@@ -347,8 +430,15 @@ static void CCInstallHooks(void) {
     }
 }
 
+static int gSettingsNotificationToken = 0;
+
 static void CCStartTelemetry(void) {
     dispatch_queue_t queue = dispatch_queue_create("local.apelin.coolcharge.telemetry", DISPATCH_QUEUE_SERIAL);
+    notify_register_dispatch(CCPreferenceChangedNotification, &gSettingsNotificationToken, queue, ^(__unused int token) {
+        CCSnapshot snapshot = CCCollectSnapshot();
+        CCApplyCooperativeThrottle(snapshot);
+        dispatch_async(dispatch_get_main_queue(), ^{ CCUpdateWidgets(snapshot); });
+    });
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), 2 * NSEC_PER_SEC, 300 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(timer, ^{
