@@ -262,39 +262,103 @@ static void CCApplyCooperativeThrottle(CCSnapshot snapshot) {
 
 @interface CCCoolChargeWidget : UIView
 - (void)cc_update:(CCSnapshot)snapshot;
+- (void)cc_setOwnerController:(UIViewController *)controller;
+- (void)cc_restoreAfterAppearance;
+- (void)cc_refreshPlacement;
 @end
+
+static BOOL CCIsNotificationLikeView(UIView *view) {
+    if (view == nil || view.hidden || view.alpha < 0.01) return NO;
+    NSString *name = NSStringFromClass(view.class).lowercaseString;
+    if (![name containsString:@"notification"] && ![name containsString:@"bulletin"]) return NO;
+    return view.bounds.size.width > 100.0 && view.bounds.size.height > 20.0;
+}
+
+static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, NSMutableArray<NSValue *> *avoidRects, UIView *rootView) {
+    if (view == nil || view.hidden || view.alpha < 0.01) return;
+    if ([view isKindOfClass:[UIScrollView class]]) {
+        UIScrollView *scrollView = (UIScrollView *)view;
+        CGFloat contentHeight = scrollView.contentSize.height;
+        CGFloat viewportHeight = scrollView.bounds.size.height;
+        if (contentHeight > viewportHeight + 4.0) {
+            CGFloat normalizedOffset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top;
+            if (fabs(normalizedOffset) > fabs(*largestScrollDelta)) *largestScrollDelta = normalizedOffset;
+        }
+    }
+    if (CCIsNotificationLikeView(view) && view != rootView) {
+        CGRect rect = [view.superview convertRect:view.frame toView:rootView];
+        if (rect.size.height < rootView.bounds.size.height * 0.65) {
+            [avoidRects addObject:[NSValue valueWithCGRect:rect]];
+        }
+    }
+    for (UIView *child in view.subviews) {
+        CCFindLockScreenMetrics(child, largestScrollDelta, avoidRects, rootView);
+    }
+}
 
 @implementation CCCoolChargeWidget {
     UILabel *_titleLabel;
     UILabel *_detailLabel;
+    UIVisualEffectView *_blurView;
+    UIView *_highlightView;
+    __weak UIViewController *_ownerController;
+    BOOL _shouldDisplay;
+    BOOL _hasPresented;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self != nil) {
         self.userInteractionEnabled = NO;
-        self.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.72];
-        self.layer.cornerRadius = 16.0;
+        self.hidden = YES;
+        self.alpha = 0.0;
+        self.layer.cornerRadius = 20.0;
+        self.layer.cornerCurve = kCACornerCurveContinuous;
         self.layer.masksToBounds = YES;
+        self.layer.borderWidth = 0.75;
+        self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
+
+        UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark];
+        _blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+        _blurView.userInteractionEnabled = NO;
+        _blurView.frame = self.bounds;
+        _blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self addSubview:_blurView];
+
+        _highlightView = [[UIView alloc] initWithFrame:CGRectZero];
+        _highlightView.userInteractionEnabled = NO;
+        _highlightView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+        _highlightView.layer.cornerRadius = 20.0;
+        _highlightView.layer.cornerCurve = kCACornerCurveContinuous;
+        _highlightView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self addSubview:_highlightView];
+
         _titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
         _detailLabel = [[UILabel alloc] initWithFrame:CGRectZero];
         for (UILabel *label in @[_titleLabel, _detailLabel]) {
+            label.userInteractionEnabled = NO;
             label.textColor = UIColor.whiteColor;
             label.textAlignment = NSTextAlignmentCenter;
             label.adjustsFontSizeToFitWidth = YES;
+            label.minimumScaleFactor = 0.78;
             [self addSubview:label];
         }
         _titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
         _detailLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightRegular];
         self.accessibilityIdentifier = @"CoolCharge.LockScreenWidget";
+        self.accessibilityTraits = UIAccessibilityTraitStaticText;
     }
     return self;
 }
 
+- (void)cc_setOwnerController:(UIViewController *)controller {
+    _ownerController = controller;
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
-    _titleLabel.frame = CGRectMake(10.0, 6.0, self.bounds.size.width - 20.0, 21.0);
-    _detailLabel.frame = CGRectMake(10.0, 27.0, self.bounds.size.width - 20.0, 18.0);
+    _titleLabel.frame = CGRectMake(12.0, 8.0, self.bounds.size.width - 24.0, 21.0);
+    _detailLabel.frame = CGRectMake(12.0, 30.0, self.bounds.size.width - 24.0, 18.0);
 }
 
 static NSString *CCMinutes(double seconds) {
@@ -309,7 +373,29 @@ static NSString *CCMinutes(double seconds) {
 
 - (void)cc_update:(CCSnapshot)snapshot {
     BOOL shouldShow = snapshot.enabled && snapshot.showWidget && (snapshot.charging || snapshot.recentSession);
-    self.hidden = !shouldShow;
+    if (shouldShow != _shouldDisplay) {
+        _shouldDisplay = shouldShow;
+        if (shouldShow) {
+            self.hidden = NO;
+            self.alpha = 0.0;
+            self.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.94, 0.94), CGAffineTransformMakeTranslation(0.0, -10.0));
+            [UIView animateWithDuration:0.48 delay:0.0 usingSpringWithDamping:0.82 initialSpringVelocity:0.25 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+                self.alpha = 1.0;
+                self.transform = CGAffineTransformIdentity;
+            } completion:^(__unused BOOL finished) {
+                self->_hasPresented = YES;
+            }];
+        } else if (_hasPresented) {
+            [UIView animateWithDuration:0.24 delay:0.0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseIn animations:^{
+                self.alpha = 0.0;
+                self.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.96, 0.96), CGAffineTransformMakeTranslation(0.0, -6.0));
+            } completion:^(__unused BOOL finished) {
+                if (!self->_shouldDisplay) self.hidden = YES;
+            }];
+        } else {
+            self.hidden = YES;
+        }
+    }
     if (!shouldShow) return;
     if (snapshot.charging) {
         NSString *power = snapshot.watts > 0.05 ? [NSString stringWithFormat:@"%.1f W", snapshot.watts] : @"Power —";
@@ -326,10 +412,117 @@ static NSString *CCMinutes(double seconds) {
         self.accessibilityLabel = _detailLabel.text;
     }
 }
+
+- (void)cc_restoreAfterAppearance {
+    if (!_shouldDisplay || !self.hidden) return;
+    self.hidden = NO;
+    self.alpha = 0.0;
+    self.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.96, 0.96), CGAffineTransformMakeTranslation(0.0, -8.0));
+    [UIView animateWithDuration:0.38 delay:0.0 usingSpringWithDamping:0.84 initialSpringVelocity:0.2 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.alpha = 1.0;
+        self.transform = CGAffineTransformIdentity;
+    } completion:^(__unused BOOL finished) {
+        self->_hasPresented = YES;
+    }];
+}
+
+- (void)cc_refreshPlacement {
+    UIViewController *controller = _ownerController;
+    UIView *rootView = controller.view;
+    if (rootView == nil || rootView.bounds.size.width <= 0.0 || rootView.bounds.size.height <= 0.0) return;
+    CGFloat width = MIN(MAX(CGRectGetWidth(rootView.bounds) - 40.0, 220.0), 360.0);
+    CGFloat height = 56.0;
+    CGFloat safeTop = rootView.safeAreaInsets.top + 64.0;
+    CGFloat safeBottom = rootView.bounds.size.height - rootView.safeAreaInsets.bottom - 12.0;
+    CGFloat minimumY = safeTop;
+    CGFloat maximumY = MAX(minimumY, safeBottom - height);
+    CGFloat scrollDelta = 0.0;
+    NSMutableArray<NSValue *> *avoidRects = [NSMutableArray array];
+    CCFindLockScreenMetrics(rootView, &scrollDelta, avoidRects, rootView);
+    CGFloat y = safeTop + fmax(-150.0, fmin(110.0, -scrollDelta));
+    y = fmax(minimumY, fmin(maximumY, y));
+
+    for (int pass = 0; pass < 3; pass++) {
+        CGRect candidate = CGRectMake((CGRectGetWidth(rootView.bounds) - width) / 2.0, y, width, height);
+        BOOL moved = NO;
+        for (NSValue *value in avoidRects) {
+            CGRect occupied = value.CGRectValue;
+            if (!CGRectIntersectsRect(candidate, occupied)) continue;
+            CGFloat above = CGRectGetMinY(occupied) - height - 10.0;
+            CGFloat below = CGRectGetMaxY(occupied) + 10.0;
+            if (above >= minimumY) y = above;
+            else if (below <= maximumY) y = below;
+            else y = minimumY;
+            y = fmax(minimumY, fmin(maximumY, y));
+            moved = YES;
+            break;
+        }
+        if (!moved) break;
+    }
+
+    CGRect targetFrame = CGRectMake((CGRectGetWidth(rootView.bounds) - width) / 2.0, y, width, height);
+    if (!CGRectEqualToRect(self.frame, targetFrame)) {
+        [UIView performWithoutAnimation:^{ self.frame = targetFrame; }];
+    }
+}
 @end
 
 static NSHashTable<CCCoolChargeWidget *> *gWidgets;
 static const char gWidgetAssociationKey;
+static CADisplayLink *gWidgetDisplayLink;
+
+@interface CCWidgetDisplayLinkTarget : NSObject
+@end
+
+@implementation CCWidgetDisplayLinkTarget
+- (void)cc_displayLinkTick:(CADisplayLink *)displayLink {
+    if (gWidgets.allObjects.count == 0) {
+        displayLink.paused = YES;
+        return;
+    }
+    for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
+        if (!widget.hidden) [widget cc_refreshPlacement];
+    }
+}
+@end
+
+static void CCStartWidgetDisplayLink(void) {
+    if (gWidgetDisplayLink != nil) return;
+    CCWidgetDisplayLinkTarget *target = [[CCWidgetDisplayLinkTarget alloc] init];
+    gWidgetDisplayLink = [CADisplayLink displayLinkWithTarget:target selector:@selector(cc_displayLinkTick:)];
+    gWidgetDisplayLink.preferredFramesPerSecond = 30;
+    [gWidgetDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+static void CCAttachWidget(id controller) {
+    if (gWidgets == nil) gWidgets = [NSHashTable weakObjectsHashTable];
+    UIView *rootView = [controller view];
+    if (rootView == nil) return;
+    CCCoolChargeWidget *widget = objc_getAssociatedObject(controller, &gWidgetAssociationKey);
+    if (widget == nil) {
+        widget = [[CCCoolChargeWidget alloc] initWithFrame:CGRectZero];
+        [widget cc_setOwnerController:controller];
+        objc_setAssociatedObject(controller, &gWidgetAssociationKey, widget, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [rootView addSubview:widget];
+        [gWidgets addObject:widget];
+        CCStartWidgetDisplayLink();
+    } else if (widget.superview != rootView) {
+        [rootView addSubview:widget];
+    }
+    [rootView bringSubviewToFront:widget];
+    [widget cc_refreshPlacement];
+    [widget cc_update:gSnapshot];
+    [widget cc_restoreAfterAppearance];
+}
+
+static void CCUpdateWidgets(CCSnapshot snapshot) {
+    gSnapshot = snapshot;
+    for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
+        [widget cc_update:snapshot];
+        if (!widget.hidden) [widget cc_refreshPlacement];
+    }
+    gWidgetDisplayLink.paused = gWidgets.allObjects.count == 0;
+}
 
 typedef void (*CCViewDidAppearIMP)(id, SEL, BOOL);
 static CCViewDidAppearIMP gOriginalBaseViewDidAppear;
@@ -339,33 +532,11 @@ typedef void (*CCViewWillDisappearIMP)(id, SEL, BOOL);
 static CCViewWillDisappearIMP gOriginalBaseViewWillDisappear;
 static CCViewWillDisappearIMP gOriginalLockViewWillDisappear;
 static CCViewWillDisappearIMP gOriginalDashBoardViewWillDisappear;
+typedef void (*CCViewDidLayoutSubviewsIMP)(id, SEL);
+static CCViewDidLayoutSubviewsIMP gOriginalBaseViewDidLayoutSubviews;
+static CCViewDidLayoutSubviewsIMP gOriginalLockViewDidLayoutSubviews;
+static CCViewDidLayoutSubviewsIMP gOriginalDashBoardViewDidLayoutSubviews;
 typedef void (*CCMSHookMessageEx)(Class, SEL, IMP, IMP *);
-
-static void CCAttachWidget(id controller) {
-    if (gWidgets == nil) gWidgets = [NSHashTable weakObjectsHashTable];
-    UIView *rootView = [controller view];
-    if (rootView == nil) return;
-    CCCoolChargeWidget *widget = objc_getAssociatedObject(controller, &gWidgetAssociationKey);
-    if (widget == nil) {
-        CGFloat width = MIN(CGRectGetWidth(rootView.bounds) - 40.0, 360.0);
-        widget = [[CCCoolChargeWidget alloc] initWithFrame:CGRectMake((CGRectGetWidth(rootView.bounds) - width) / 2.0, 108.0, width, 51.0)];
-        widget.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-        objc_setAssociatedObject(controller, &gWidgetAssociationKey, widget, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [rootView addSubview:widget];
-        [gWidgets addObject:widget];
-    } else if (widget.superview != rootView) {
-        [rootView addSubview:widget];
-    }
-    [rootView bringSubviewToFront:widget];
-    [widget cc_update:gSnapshot];
-}
-
-static void CCUpdateWidgets(CCSnapshot snapshot) {
-    gSnapshot = snapshot;
-    for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
-        [widget cc_update:snapshot];
-    }
-}
 
 static void HookedBaseViewDidAppear(id self, SEL _cmd, BOOL animated) {
     if (gOriginalBaseViewDidAppear != NULL) gOriginalBaseViewDidAppear(self, _cmd, animated);
@@ -389,6 +560,16 @@ static void HookedLockViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     widget.hidden = YES;
 }
 
+static void HookedBaseViewDidLayoutSubviews(id self, SEL _cmd) {
+    if (gOriginalBaseViewDidLayoutSubviews != NULL) gOriginalBaseViewDidLayoutSubviews(self, _cmd);
+    CCAttachWidget(self);
+}
+
+static void HookedLockViewDidLayoutSubviews(id self, SEL _cmd) {
+    if (gOriginalLockViewDidLayoutSubviews != NULL) gOriginalLockViewDidLayoutSubviews(self, _cmd);
+    CCAttachWidget(self);
+}
+
 static void HookedDashBoardViewDidAppear(id self, SEL _cmd, BOOL animated) {
     if (gOriginalDashBoardViewDidAppear != NULL) gOriginalDashBoardViewDidAppear(self, _cmd, animated);
     dispatch_async(dispatch_get_main_queue(), ^{ CCAttachWidget(self); });
@@ -398,6 +579,11 @@ static void HookedDashBoardViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     if (gOriginalDashBoardViewWillDisappear != NULL) gOriginalDashBoardViewWillDisappear(self, _cmd, animated);
     CCCoolChargeWidget *widget = objc_getAssociatedObject(self, &gWidgetAssociationKey);
     widget.hidden = YES;
+}
+
+static void HookedDashBoardViewDidLayoutSubviews(id self, SEL _cmd) {
+    if (gOriginalDashBoardViewDidLayoutSubviews != NULL) gOriginalDashBoardViewDidLayoutSubviews(self, _cmd);
+    CCAttachWidget(self);
 }
 
 static void CCInstallHooks(void) {
@@ -410,18 +596,21 @@ static void CCInstallHooks(void) {
     if (base != Nil) {
         hooker(base, @selector(viewDidAppear:), (IMP)HookedBaseViewDidAppear, (IMP *)&gOriginalBaseViewDidAppear);
         hooker(base, @selector(viewWillDisappear:), (IMP)HookedBaseViewWillDisappear, (IMP *)&gOriginalBaseViewWillDisappear);
+        hooker(base, @selector(viewDidLayoutSubviews), (IMP)HookedBaseViewDidLayoutSubviews, (IMP *)&gOriginalBaseViewDidLayoutSubviews);
         os_log(CCLog(), "CoolCharge installed SBLockScreenViewControllerBase hooks");
     }
     Class lockView = objc_getClass("SBLockScreenViewController");
     if (lockView != Nil && lockView != base) {
         hooker(lockView, @selector(viewDidAppear:), (IMP)HookedLockViewDidAppear, (IMP *)&gOriginalLockViewDidAppear);
         hooker(lockView, @selector(viewWillDisappear:), (IMP)HookedLockViewWillDisappear, (IMP *)&gOriginalLockViewWillDisappear);
+        hooker(lockView, @selector(viewDidLayoutSubviews), (IMP)HookedLockViewDidLayoutSubviews, (IMP *)&gOriginalLockViewDidLayoutSubviews);
         os_log(CCLog(), "CoolCharge installed SBLockScreenViewController hooks");
     }
     Class dashBoard = objc_getClass("SBDashBoardViewController");
     if (dashBoard != Nil && dashBoard != base && dashBoard != lockView) {
         hooker(dashBoard, @selector(viewDidAppear:), (IMP)HookedDashBoardViewDidAppear, (IMP *)&gOriginalDashBoardViewDidAppear);
         hooker(dashBoard, @selector(viewWillDisappear:), (IMP)HookedDashBoardViewWillDisappear, (IMP *)&gOriginalDashBoardViewWillDisappear);
+        hooker(dashBoard, @selector(viewDidLayoutSubviews), (IMP)HookedDashBoardViewDidLayoutSubviews, (IMP *)&gOriginalDashBoardViewDidLayoutSubviews);
         os_log(CCLog(), "CoolCharge installed SBDashBoardViewController hooks");
     }
     if (base == Nil && lockView == Nil && dashBoard == Nil) {

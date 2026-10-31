@@ -55,7 +55,7 @@ for arch in $arches; do
     "-DAPELIN_BUILD_ID=\"${APELIN_BUILD_ID}\"" \
     -arch "$arch" -c "$project/Sources/Tweak.m" -o "$work/$arch-tweak.o"
   clang -dynamiclib -arch "$arch" "$work/$arch-tweak.o" \
-    -framework Foundation -framework UIKit -framework CoreGraphics -framework IOKit \
+    -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -framework IOKit \
     -install_name "@rpath/CoolCharge.dylib" \
     -o "$work/slices/CoolCharge-$arch.dylib"
 
@@ -120,7 +120,7 @@ chmod 0644 \
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: com.ilyastekdin.coolcharge
 Name: CoolCharge
-Version: 0.2.7
+Version: 0.2.9
 Architecture: ${APELIN_ARCHITECTURE}
 Description: Cooperative thermal guard, charging telemetry, and live Settings preview for SpringBoard
 Section: Tweaks
