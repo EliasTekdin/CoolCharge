@@ -30,6 +30,50 @@
         </dict>
         <dict>
             <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Thermal ceiling</string>
+            <key>footerText</key>
+            <string>CoolCharge starts reducing SpringBoard work before this battery-temperature limit and escalates at the limit. iOS still controls hardware and charging power.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>label</key>
+            <string>Temperature limit</string>
+            <key>key</key>
+            <string>temperatureLimitC</string>
+            <key>min</key>
+            <real>32.0</real>
+            <key>max</key>
+            <real>42.0</real>
+            <key>default</key>
+            <real>36.5</real>
+            <key>showValue</key>
+            <true/>
+            <key>isContinuous</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Protect while locked</string>
+            <key>key</key>
+            <string>protectWhenLocked</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.ilyastekdin.coolcharge</string>
+            <key>PostNotification</key>
+            <string>com.ilyastekdin.coolcharge/changed</string>
+        </dict>
+        <dict>
+            <key>cell</key>
             <string>PSSwitchCell</string>
             <key>label</key>
             <string>Lock Screen widget</string>

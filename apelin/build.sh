@@ -88,7 +88,7 @@ chmod 0755 "$prefs_path"
 
 # The roothide injector consumes this sidecar for dynamic patch mapping.
 if [ "$APELIN_BOOTSTRAP" = roothide ]; then
-  ln -s ../../../usr/lib/DynamicPatches/AutoPatches.dylib \
+  ln -s /usr/lib/DynamicPatches/AutoPatches.dylib \
     "$stage${APELIN_PREFIX}/Library/MobileSubstrate/DynamicLibraries/CoolCharge.dylib.roothidepatch"
 fi
 
@@ -120,7 +120,7 @@ chmod 0644 \
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: com.ilyastekdin.coolcharge
 Name: CoolCharge
-Version: 0.3.8
+Version: 0.3.9
 Architecture: ${APELIN_ARCHITECTURE}
 Description: Cooperative thermal guard, charging telemetry, and live Settings preview for SpringBoard
 Section: Tweaks

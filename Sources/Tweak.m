@@ -71,6 +71,9 @@ typedef struct {
     BOOL showTemperature;
     BOOL showRecentSession;
     BOOL recentSession;
+    BOOL locked;
+    BOOL protectWhenLocked;
+    double thermalThreshold;
 } CCSnapshot;
 
 static CCSnapshot gSnapshot;
@@ -82,6 +85,11 @@ static int gBasePriority = 0;
 static BOOL gBasePriorityCaptured = NO;
 static int gAppliedPriority = INT_MIN;
 static double gSessionStartedAt = 0.0;
+static BOOL gCoverSheetVisible = NO;
+
+static const double kCCDefaultThermalThresholdC = 36.5;
+static const double kCCMinimumThermalThresholdC = 32.0;
+static const double kCCMaximumThermalThresholdC = 42.0;
 
 static double CCBatteryTemperature(void) {
     typedef io_service_t (*CCIOServiceGetMatchingService)(mach_port_t, CFDictionaryRef);
@@ -144,6 +152,12 @@ static CCSnapshot CCCollectSnapshot(void) {
     result.showSessionTimes = CCPreferenceBool(state, @"showSessionTimes", YES);
     result.showTemperature = CCPreferenceBool(state, @"showTemperature", YES);
     result.showRecentSession = CCPreferenceBool(state, @"showRecentSession", YES);
+    result.thermalThreshold = CCPreferenceDouble(state, @"temperatureLimitC", kCCDefaultThermalThresholdC);
+    if (result.thermalThreshold < kCCMinimumThermalThresholdC || result.thermalThreshold > kCCMaximumThermalThresholdC) {
+        result.thermalThreshold = kCCDefaultThermalThresholdC;
+    }
+    result.protectWhenLocked = CCPreferenceBool(state, @"protectWhenLocked", YES);
+    result.locked = gCoverSheetVisible;
     result.sessionStart = CCPreferenceDouble(state, @"sessionStart", 0.0);
     result.lastSessionStart = CCPreferenceDouble(state, @"lastSessionStart", 0.0);
     result.lastSessionStop = CCPreferenceDouble(state, @"lastSessionStop", 0.0);
@@ -218,14 +232,24 @@ static CCSnapshot CCCollectSnapshot(void) {
     NSProcessInfoThermalState thermalState = [NSProcessInfo processInfo].thermalState;
     double thermalFactor = 0.0;
     if (thermalState == NSProcessInfoThermalStateFair) thermalFactor = 0.25;
-    else if (thermalState == NSProcessInfoThermalStateSerious) thermalFactor = 0.55;
-    else if (thermalState == NSProcessInfoThermalStateCritical) thermalFactor = 0.85;
+    else if (thermalState == NSProcessInfoThermalStateSerious) thermalFactor = 0.60;
+    else if (thermalState == NSProcessInfoThermalStateCritical) thermalFactor = 1.0;
+
+    // Start reducing SpringBoard work before the ceiling, then escalate
+    // sharply at/above it. This is intentionally cooperative: iOS remains in
+    // charge of PMIC and hardware thermal management.
     if (result.temperature > 0.0) {
-        double temperatureFactor = (result.temperature - 29.0) / 13.0;
+        double rampStart = result.thermalThreshold - 3.0;
+        double temperatureFactor = (result.temperature - rampStart) / 3.0;
         if (temperatureFactor > thermalFactor) thermalFactor = temperatureFactor;
+        if (result.temperature >= result.thermalThreshold) {
+            double aboveLimit = fmin(fmax(result.temperature - result.thermalThreshold, 0.0) / 4.0, 1.0);
+            double limitFactor = 0.72 + (aboveLimit * 0.28);
+            if (limitFactor > thermalFactor) thermalFactor = limitFactor;
+        }
     }
     if (result.watts > 0.0) {
-        double chargingFactor = fmin(result.watts / 30.0, 1.0) * 0.15;
+        double chargingFactor = fmin(result.watts / 30.0, 1.0) * 0.12;
         if (chargingFactor > thermalFactor) thermalFactor = chargingFactor;
     }
     result.throttle = fmax(0.0, fmin(1.0, thermalFactor));
@@ -244,15 +268,20 @@ static void CCApplyCooperativeThrottle(CCSnapshot snapshot) {
     if (!gBasePriorityCaptured) return;
 
     int desired = gBasePriority;
-    if (snapshot.charging && snapshot.enabled) {
-        desired = gBasePriority + (int)ceil(snapshot.throttle * 10.0);
+    BOOL lockedAndHot = snapshot.protectWhenLocked && snapshot.locked && snapshot.temperature >= snapshot.thermalThreshold;
+    BOOL guardActive = snapshot.enabled && (snapshot.charging || lockedAndHot);
+    if (guardActive) {
+        // This only yields SpringBoard CPU scheduling time. iOS remains the
+        // authority for system-wide and hardware thermal throttling.
+        desired = gBasePriority + (int)ceil(snapshot.throttle * 19.0);
         if (desired > 19) desired = 19;
     }
     if (desired != gAppliedPriority) {
         if (setpriority(PRIO_PROCESS, 0, desired) == 0) {
             gAppliedPriority = desired;
-            os_log(CCLog(), "CoolCharge cooperative guard: charging=%{public}s temperature=%.1fC watts=%.1f priority=%d throttle=%.0f%%",
-                   snapshot.charging ? "yes" : "no", snapshot.temperature, snapshot.watts,
+            os_log(CCLog(), "CoolCharge thermal guard: charging=%{public}s locked=%{public}s temperature=%.1fC limit=%.1fC watts=%.1f priority=%d throttle=%.0f%%",
+                   snapshot.charging ? "yes" : "no", snapshot.locked ? "yes" : "no",
+                   snapshot.temperature, snapshot.thermalThreshold, snapshot.watts,
                    desired, snapshot.throttle * 100.0);
         } else {
             os_log_error(CCLog(), "CoolCharge could not set SpringBoard priority: errno=%d", errno);
@@ -576,6 +605,7 @@ static CCViewDidMoveToWindowIMP gOriginalCoverSheetDidMoveToWindow;
 static CCViewLayoutIMP gOriginalCoverSheetLayoutSubviews;
 static CCViewControllerAppearanceIMP gOriginalCoverSheetViewDidAppear;
 static CCViewControllerAppearanceIMP gOriginalCoverSheetViewWillDisappear;
+static CCViewControllerAppearanceIMP gOriginalCoverSheetViewDidDisappear;
 typedef void (*CCMSHookMessageEx)(Class, SEL, IMP, IMP *);
 
 static void CCHideWidgetForView(id object) {
@@ -598,6 +628,7 @@ static void HookedCoverSheetLayoutSubviews(id self, SEL _cmd) {
 
 static void HookedCoverSheetViewDidAppear(id self, SEL _cmd, BOOL animated) {
     if (gOriginalCoverSheetViewDidAppear != NULL) gOriginalCoverSheetViewDidAppear(self, _cmd, animated);
+    gCoverSheetVisible = YES;
     UIView *view = [(UIViewController *)self view];
     Class coverSheetClass = objc_getClass("CSCoverSheetView");
     if (view != nil && (coverSheetClass == Nil || [view isKindOfClass:coverSheetClass])) CCAttachWidgetToView(view);
@@ -605,8 +636,14 @@ static void HookedCoverSheetViewDidAppear(id self, SEL _cmd, BOOL animated) {
 
 static void HookedCoverSheetViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     if (gOriginalCoverSheetViewWillDisappear != NULL) gOriginalCoverSheetViewWillDisappear(self, _cmd, animated);
+    gCoverSheetVisible = NO;
     UIView *view = [(UIViewController *)self view];
     if (view != nil) CCHideWidgetForView(view);
+}
+
+static void HookedCoverSheetViewDidDisappear(id self, SEL _cmd, BOOL animated) {
+    if (gOriginalCoverSheetViewDidDisappear != NULL) gOriginalCoverSheetViewDidDisappear(self, _cmd, animated);
+    gCoverSheetVisible = NO;
 }
 
 static void CCInstallCoverSheetHooks(void) {
@@ -629,6 +666,7 @@ static void CCInstallCoverSheetHooks(void) {
     if (controller != Nil) {
         hooker(controller, @selector(viewDidAppear:), (IMP)HookedCoverSheetViewDidAppear, (IMP *)&gOriginalCoverSheetViewDidAppear);
         hooker(controller, @selector(viewWillDisappear:), (IMP)HookedCoverSheetViewWillDisappear, (IMP *)&gOriginalCoverSheetViewWillDisappear);
+        hooker(controller, @selector(viewDidDisappear:), (IMP)HookedCoverSheetViewDidDisappear, (IMP *)&gOriginalCoverSheetViewDidDisappear);
         os_log(CCLog(), "CoolCharge installed CSCoverSheetViewController lifecycle hooks");
     } else {
         os_log_error(CCLog(), "CoolCharge could not find CSCoverSheetViewController");
@@ -645,7 +683,7 @@ static void CCStartTelemetry(void) {
         dispatch_async(dispatch_get_main_queue(), ^{ CCUpdateWidgets(snapshot); });
     });
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), 2 * NSEC_PER_SEC, 300 * NSEC_PER_MSEC);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC, 50 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(timer, ^{
         CCSnapshot snapshot = CCCollectSnapshot();
         CCApplyCooperativeThrottle(snapshot);
