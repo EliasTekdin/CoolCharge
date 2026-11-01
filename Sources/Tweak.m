@@ -262,7 +262,7 @@ static void CCApplyCooperativeThrottle(CCSnapshot snapshot) {
 
 @interface CCCoolChargeWidget : UIView
 - (void)cc_update:(CCSnapshot)snapshot;
-- (void)cc_setOwnerController:(UIViewController *)controller;
+- (void)cc_setOwnerView:(UIView *)view;
 - (void)cc_restoreAfterAppearance;
 - (void)cc_refreshPlacement;
 @end
@@ -301,7 +301,7 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
     UILabel *_detailLabel;
     UIVisualEffectView *_blurView;
     UIView *_highlightView;
-    __weak UIViewController *_ownerController;
+    __weak UIView *_ownerView;
     BOOL _shouldDisplay;
     BOOL _hasPresented;
 }
@@ -351,8 +351,8 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
     return self;
 }
 
-- (void)cc_setOwnerController:(UIViewController *)controller {
-    _ownerController = controller;
+- (void)cc_setOwnerView:(UIView *)view {
+    _ownerView = view;
 }
 
 - (void)layoutSubviews {
@@ -427,8 +427,7 @@ static NSString *CCMinutes(double seconds) {
 }
 
 - (void)cc_refreshPlacement {
-    UIViewController *controller = _ownerController;
-    UIView *rootView = controller.view;
+    UIView *rootView = _ownerView;
     if (rootView == nil || rootView.bounds.size.width <= 0.0 || rootView.bounds.size.height <= 0.0) return;
     CGFloat width = MIN(MAX(CGRectGetWidth(rootView.bounds) - 40.0, 220.0), 360.0);
     CGFloat height = 56.0;
@@ -494,27 +493,6 @@ static void CCStartWidgetDisplayLink(void) {
     [gWidgetDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 }
 
-static void CCAttachWidget(id controller) {
-    if (gWidgets == nil) gWidgets = [NSHashTable weakObjectsHashTable];
-    UIView *rootView = [controller view];
-    if (rootView == nil) return;
-    CCCoolChargeWidget *widget = objc_getAssociatedObject(controller, &gWidgetAssociationKey);
-    if (widget == nil) {
-        widget = [[CCCoolChargeWidget alloc] initWithFrame:CGRectZero];
-        [widget cc_setOwnerController:controller];
-        objc_setAssociatedObject(controller, &gWidgetAssociationKey, widget, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [rootView addSubview:widget];
-        [gWidgets addObject:widget];
-        CCStartWidgetDisplayLink();
-    } else if (widget.superview != rootView) {
-        [rootView addSubview:widget];
-    }
-    [rootView bringSubviewToFront:widget];
-    [widget cc_refreshPlacement];
-    [widget cc_update:gSnapshot];
-    [widget cc_restoreAfterAppearance];
-}
-
 static void CCUpdateWidgets(CCSnapshot snapshot) {
     gSnapshot = snapshot;
     for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
@@ -524,98 +502,101 @@ static void CCUpdateWidgets(CCSnapshot snapshot) {
     gWidgetDisplayLink.paused = gWidgets.allObjects.count == 0;
 }
 
-typedef void (*CCViewDidAppearIMP)(id, SEL, BOOL);
-static CCViewDidAppearIMP gOriginalBaseViewDidAppear;
-static CCViewDidAppearIMP gOriginalLockViewDidAppear;
-static CCViewDidAppearIMP gOriginalDashBoardViewDidAppear;
-typedef void (*CCViewWillDisappearIMP)(id, SEL, BOOL);
-static CCViewWillDisappearIMP gOriginalBaseViewWillDisappear;
-static CCViewWillDisappearIMP gOriginalLockViewWillDisappear;
-static CCViewWillDisappearIMP gOriginalDashBoardViewWillDisappear;
-typedef void (*CCViewDidLayoutSubviewsIMP)(id, SEL);
-static CCViewDidLayoutSubviewsIMP gOriginalBaseViewDidLayoutSubviews;
-static CCViewDidLayoutSubviewsIMP gOriginalLockViewDidLayoutSubviews;
-static CCViewDidLayoutSubviewsIMP gOriginalDashBoardViewDidLayoutSubviews;
-typedef void (*CCMSHookMessageEx)(Class, SEL, IMP, IMP *);
-
-static void HookedBaseViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalBaseViewDidAppear != NULL) gOriginalBaseViewDidAppear(self, _cmd, animated);
-    dispatch_async(dispatch_get_main_queue(), ^{ CCAttachWidget(self); });
-}
-
-static void HookedLockViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalLockViewDidAppear != NULL) gOriginalLockViewDidAppear(self, _cmd, animated);
-    dispatch_async(dispatch_get_main_queue(), ^{ CCAttachWidget(self); });
-}
-
-static void HookedBaseViewWillDisappear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalBaseViewWillDisappear != NULL) gOriginalBaseViewWillDisappear(self, _cmd, animated);
-    CCCoolChargeWidget *widget = objc_getAssociatedObject(self, &gWidgetAssociationKey);
-    widget.hidden = YES;
-}
-
-static void HookedLockViewWillDisappear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalLockViewWillDisappear != NULL) gOriginalLockViewWillDisappear(self, _cmd, animated);
-    CCCoolChargeWidget *widget = objc_getAssociatedObject(self, &gWidgetAssociationKey);
-    widget.hidden = YES;
-}
-
-static void HookedBaseViewDidLayoutSubviews(id self, SEL _cmd) {
-    if (gOriginalBaseViewDidLayoutSubviews != NULL) gOriginalBaseViewDidLayoutSubviews(self, _cmd);
-    CCAttachWidget(self);
-}
-
-static void HookedLockViewDidLayoutSubviews(id self, SEL _cmd) {
-    if (gOriginalLockViewDidLayoutSubviews != NULL) gOriginalLockViewDidLayoutSubviews(self, _cmd);
-    CCAttachWidget(self);
-}
-
-static void HookedDashBoardViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalDashBoardViewDidAppear != NULL) gOriginalDashBoardViewDidAppear(self, _cmd, animated);
-    dispatch_async(dispatch_get_main_queue(), ^{ CCAttachWidget(self); });
-}
-
-static void HookedDashBoardViewWillDisappear(id self, SEL _cmd, BOOL animated) {
-    if (gOriginalDashBoardViewWillDisappear != NULL) gOriginalDashBoardViewWillDisappear(self, _cmd, animated);
-    CCCoolChargeWidget *widget = objc_getAssociatedObject(self, &gWidgetAssociationKey);
-    widget.hidden = YES;
-}
-
-static void HookedDashBoardViewDidLayoutSubviews(id self, SEL _cmd) {
-    if (gOriginalDashBoardViewDidLayoutSubviews != NULL) gOriginalDashBoardViewDidLayoutSubviews(self, _cmd);
-    CCAttachWidget(self);
-}
-
-static void CCInstallHooks(void) {
-    CCMSHookMessageEx hooker = (CCMSHookMessageEx)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
-    if (hooker == NULL) {
-        os_log_error(CCLog(), "CoolCharge could not find MSHookMessageEx; Lock Screen panel disabled");
-        return;
+static UIView *CCFindLockScreenMarker(UIView *view, NSInteger depth) {
+    if (view == nil || depth > 7) return nil;
+    NSString *name = NSStringFromClass(view.class).lowercaseString;
+    if ([name containsString:@"dashboard"] || [name containsString:@"lockscreen"] ||
+        [name containsString:@"coversheet"] || [name containsString:@"lockscreenview"]) {
+        return view;
     }
-    Class base = objc_getClass("SBLockScreenViewControllerBase");
-    if (base != Nil) {
-        hooker(base, @selector(viewDidAppear:), (IMP)HookedBaseViewDidAppear, (IMP *)&gOriginalBaseViewDidAppear);
-        hooker(base, @selector(viewWillDisappear:), (IMP)HookedBaseViewWillDisappear, (IMP *)&gOriginalBaseViewWillDisappear);
-        hooker(base, @selector(viewDidLayoutSubviews), (IMP)HookedBaseViewDidLayoutSubviews, (IMP *)&gOriginalBaseViewDidLayoutSubviews);
-        os_log(CCLog(), "CoolCharge installed SBLockScreenViewControllerBase hooks");
+    for (UIView *child in view.subviews) {
+        UIView *match = CCFindLockScreenMarker(child, depth + 1);
+        if (match != nil) return match;
     }
-    Class lockView = objc_getClass("SBLockScreenViewController");
-    if (lockView != Nil && lockView != base) {
-        hooker(lockView, @selector(viewDidAppear:), (IMP)HookedLockViewDidAppear, (IMP *)&gOriginalLockViewDidAppear);
-        hooker(lockView, @selector(viewWillDisappear:), (IMP)HookedLockViewWillDisappear, (IMP *)&gOriginalLockViewWillDisappear);
-        hooker(lockView, @selector(viewDidLayoutSubviews), (IMP)HookedLockViewDidLayoutSubviews, (IMP *)&gOriginalLockViewDidLayoutSubviews);
-        os_log(CCLog(), "CoolCharge installed SBLockScreenViewController hooks");
+    return nil;
+}
+
+static BOOL CCWindowLooksLikeLockScreen(UIWindow *window) {
+    if (window == nil || window.hidden || window.alpha < 0.01 || window.bounds.size.width < 200.0) return NO;
+    NSString *windowName = NSStringFromClass(window.class).lowercaseString;
+    NSString *controllerName = NSStringFromClass(window.rootViewController.class).lowercaseString;
+    if ([windowName containsString:@"dashboard"] || [windowName containsString:@"lockscreen"] ||
+        [windowName containsString:@"coversheet"] || [controllerName containsString:@"dashboard"] ||
+        [controllerName containsString:@"lockscreen"] || [controllerName containsString:@"coversheet"]) {
+        return YES;
     }
-    Class dashBoard = objc_getClass("SBDashBoardViewController");
-    if (dashBoard != Nil && dashBoard != base && dashBoard != lockView) {
-        hooker(dashBoard, @selector(viewDidAppear:), (IMP)HookedDashBoardViewDidAppear, (IMP *)&gOriginalDashBoardViewDidAppear);
-        hooker(dashBoard, @selector(viewWillDisappear:), (IMP)HookedDashBoardViewWillDisappear, (IMP *)&gOriginalDashBoardViewWillDisappear);
-        hooker(dashBoard, @selector(viewDidLayoutSubviews), (IMP)HookedDashBoardViewDidLayoutSubviews, (IMP *)&gOriginalDashBoardViewDidLayoutSubviews);
-        os_log(CCLog(), "CoolCharge installed SBDashBoardViewController hooks");
+    return CCFindLockScreenMarker(window, 0) != nil;
+}
+
+static UIView *CCFindLockScreenHost(void) {
+    UIApplication *application = UIApplication.sharedApplication;
+    for (UIScene *scene in application.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        for (UIWindow *window in windowScene.windows) {
+            if (CCWindowLooksLikeLockScreen(window)) return window;
+        }
     }
-    if (base == Nil && lockView == Nil && dashBoard == Nil) {
-        os_log_error(CCLog(), "CoolCharge found no known Lock Screen controller class");
+    return nil;
+}
+
+static void CCAttachWidgetToView(UIView *hostView) {
+    if (hostView == nil) return;
+    if (gWidgets == nil) gWidgets = [NSHashTable weakObjectsHashTable];
+    CCCoolChargeWidget *widget = objc_getAssociatedObject(hostView, &gWidgetAssociationKey);
+    if (widget == nil) {
+        widget = [[CCCoolChargeWidget alloc] initWithFrame:CGRectZero];
+        [widget cc_setOwnerView:hostView];
+        objc_setAssociatedObject(hostView, &gWidgetAssociationKey, widget, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [hostView addSubview:widget];
+        [gWidgets addObject:widget];
+        CCStartWidgetDisplayLink();
+    } else if (widget.superview != hostView) {
+        [hostView addSubview:widget];
     }
+    [hostView bringSubviewToFront:widget];
+    [widget cc_refreshPlacement];
+    [widget cc_update:gSnapshot];
+    [widget cc_restoreAfterAppearance];
+}
+
+static __weak UIView *gOverlayHost;
+static NSTimer *gOverlayScanTimer;
+
+static void CCScanForLockScreenOverlay(void) {
+    UIView *host = CCFindLockScreenHost();
+    if (host != gOverlayHost) {
+        CCCoolChargeWidget *oldWidget = objc_getAssociatedObject(gOverlayHost, &gWidgetAssociationKey);
+        oldWidget.hidden = YES;
+        gOverlayHost = host;
+        os_log(CCLog(), "CoolCharge overlay host %{public}s", host == nil ? "absent" : NSStringFromClass(host.class).UTF8String);
+    }
+    if (host != nil) CCAttachWidgetToView(host);
+    for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
+        if (!widget.hidden) [widget cc_refreshPlacement];
+    }
+}
+
+@interface CCOverlayScannerTarget : NSObject
+@end
+
+@implementation CCOverlayScannerTarget
+- (void)cc_scan:(NSTimer *)timer {
+    (void)timer;
+    CCScanForLockScreenOverlay();
+}
+@end
+
+static void CCStartOverlayScanner(void) {
+    if (gOverlayScanTimer != nil) return;
+    CCOverlayScannerTarget *target = [[CCOverlayScannerTarget alloc] init];
+    gOverlayScanTimer = [NSTimer timerWithTimeInterval:0.25
+                                                  target:target
+                                                selector:@selector(cc_scan:)
+                                                userInfo:nil
+                                                 repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:gOverlayScanTimer forMode:NSRunLoopCommonModes];
+    CCScanForLockScreenOverlay();
 }
 
 static int gSettingsNotificationToken = 0;
@@ -642,7 +623,7 @@ __attribute__((constructor)) static void CoolChargeInitialize(void) {
     if (objc_getClass("SpringBoard") == Nil) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         gWidgets = [NSHashTable weakObjectsHashTable];
-        CCInstallHooks();
+        CCStartOverlayScanner();
     });
     CCStartTelemetry();
 }
