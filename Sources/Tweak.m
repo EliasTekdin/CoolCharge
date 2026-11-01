@@ -300,6 +300,8 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
     UILabel *_titleLabel;
     UILabel *_detailLabel;
     UIImageView *_boltImageView;
+    CAShapeLayer *_ringTrackLayer;
+    CAShapeLayer *_ringProgressLayer;
     UIVisualEffectView *_blurView;
     UIView *_highlightView;
     __weak UIView *_ownerView;
@@ -334,6 +336,21 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
         _highlightView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self addSubview:_highlightView];
 
+        _ringTrackLayer = [CAShapeLayer layer];
+        _ringTrackLayer.fillColor = UIColor.clearColor.CGColor;
+        _ringTrackLayer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
+        _ringTrackLayer.lineWidth = 2.0;
+        _ringTrackLayer.lineCap = kCALineCapRound;
+        [self.layer addSublayer:_ringTrackLayer];
+
+        _ringProgressLayer = [CAShapeLayer layer];
+        _ringProgressLayer.fillColor = UIColor.clearColor.CGColor;
+        _ringProgressLayer.strokeColor = UIColor.systemGreenColor.CGColor;
+        _ringProgressLayer.lineWidth = 2.0;
+        _ringProgressLayer.lineCap = kCALineCapRound;
+        _ringProgressLayer.strokeEnd = 0.0;
+        [self.layer addSublayer:_ringProgressLayer];
+
         _boltImageView = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"bolt.fill"]];
         _boltImageView.userInteractionEnabled = NO;
         _boltImageView.contentMode = UIViewContentModeScaleAspectFit;
@@ -350,8 +367,8 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
             label.minimumScaleFactor = 0.78;
             [self addSubview:label];
         }
-        _titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:15.0 weight:UIFontWeightSemibold];
-        _detailLabel.font = [UIFont monospacedDigitSystemFontOfSize:11.5 weight:UIFontWeightRegular];
+        _titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:18.0 weight:UIFontWeightSemibold];
+        _detailLabel.font = [UIFont monospacedDigitSystemFontOfSize:11.0 weight:UIFontWeightRegular];
         self.accessibilityIdentifier = @"CoolCharge.LockScreenWidget";
         self.accessibilityTraits = UIAccessibilityTraitStaticText;
     }
@@ -366,9 +383,19 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
     [super layoutSubviews];
     self.layer.cornerRadius = CGRectGetHeight(self.bounds) / 2.0;
     _highlightView.layer.cornerRadius = CGRectGetHeight(self.bounds) / 2.0;
-    _boltImageView.frame = CGRectMake(12.0, 14.0, 22.0, 28.0);
-    _titleLabel.frame = CGRectMake(42.0, 8.0, MAX(0.0, self.bounds.size.width - 54.0), 21.0);
-    _detailLabel.frame = CGRectMake(42.0, 30.0, MAX(0.0, self.bounds.size.width - 54.0), 18.0);
+
+    CGPoint ringCenter = CGPointMake(25.0, CGRectGetMidY(self.bounds));
+    CGFloat ringRadius = 13.0;
+    CGRect ringBounds = CGRectMake(ringCenter.x - ringRadius, ringCenter.y - ringRadius, ringRadius * 2.0, ringRadius * 2.0);
+    UIBezierPath *ringPath = [UIBezierPath bezierPathWithOvalInRect:ringBounds];
+    _ringTrackLayer.frame = self.bounds;
+    _ringTrackLayer.path = ringPath.CGPath;
+    _ringProgressLayer.frame = self.bounds;
+    _ringProgressLayer.path = ringPath.CGPath;
+
+    _boltImageView.frame = CGRectMake(17.0, CGRectGetMidY(self.bounds) - 8.0, 16.0, 16.0);
+    _titleLabel.frame = CGRectMake(49.0, 8.0, MAX(0.0, self.bounds.size.width - 61.0), 25.0);
+    _detailLabel.frame = CGRectMake(49.0, 35.0, MAX(0.0, self.bounds.size.width - 61.0), 17.0);
 }
 
 static NSString *CCMinutes(double seconds) {
@@ -407,6 +434,14 @@ static NSString *CCMinutes(double seconds) {
         }
     }
     if (!shouldShow) return;
+    CGFloat progress = fmax(0.0, fmin(1.0, snapshot.percent / 100.0));
+    if (!snapshot.charging && snapshot.recentSession) progress = 1.0;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _ringProgressLayer.strokeEnd = progress;
+    _ringProgressLayer.strokeColor = (snapshot.charging ? UIColor.systemGreenColor : UIColor.systemYellowColor).CGColor;
+    _boltImageView.tintColor = snapshot.charging ? UIColor.systemGreenColor : UIColor.systemYellowColor;
+    [CATransaction commit];
     if (snapshot.charging) {
         NSString *power = snapshot.watts > 0.05 ? [NSString stringWithFormat:@"%.1f W", snapshot.watts] : @"Power —";
         NSString *capacity = [NSString stringWithFormat:@"%.0f%%", snapshot.percent];
@@ -442,7 +477,7 @@ static NSString *CCMinutes(double seconds) {
     UIView *rootView = _ownerView;
     if (rootView == nil || rootView.bounds.size.width <= 0.0 || rootView.bounds.size.height <= 0.0) return;
     CGFloat width = MIN(MAX(CGRectGetWidth(rootView.bounds) - 40.0, 220.0), 360.0);
-    CGFloat height = 56.0;
+    CGFloat height = 64.0;
     CGFloat safeTop = rootView.safeAreaInsets.top + 64.0;
     CGFloat safeBottom = rootView.bounds.size.height - rootView.safeAreaInsets.bottom - 12.0;
     CGFloat minimumY = safeTop;
