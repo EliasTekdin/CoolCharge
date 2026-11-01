@@ -299,6 +299,7 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
 @implementation CCCoolChargeWidget {
     UILabel *_titleLabel;
     UILabel *_detailLabel;
+    UIImageView *_boltImageView;
     UIVisualEffectView *_blurView;
     UIView *_highlightView;
     __weak UIView *_ownerView;
@@ -333,6 +334,12 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
         _highlightView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self addSubview:_highlightView];
 
+        _boltImageView = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"bolt.fill"]];
+        _boltImageView.userInteractionEnabled = NO;
+        _boltImageView.contentMode = UIViewContentModeScaleAspectFit;
+        _boltImageView.tintColor = UIColor.systemGreenColor;
+        [self addSubview:_boltImageView];
+
         _titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
         _detailLabel = [[UILabel alloc] initWithFrame:CGRectZero];
         for (UILabel *label in @[_titleLabel, _detailLabel]) {
@@ -343,8 +350,8 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
             label.minimumScaleFactor = 0.78;
             [self addSubview:label];
         }
-        _titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
-        _detailLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightRegular];
+        _titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:15.0 weight:UIFontWeightSemibold];
+        _detailLabel.font = [UIFont monospacedDigitSystemFontOfSize:11.5 weight:UIFontWeightRegular];
         self.accessibilityIdentifier = @"CoolCharge.LockScreenWidget";
         self.accessibilityTraits = UIAccessibilityTraitStaticText;
     }
@@ -357,8 +364,11 @@ static void CCFindLockScreenMetrics(UIView *view, CGFloat *largestScrollDelta, N
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    _titleLabel.frame = CGRectMake(12.0, 8.0, self.bounds.size.width - 24.0, 21.0);
-    _detailLabel.frame = CGRectMake(12.0, 30.0, self.bounds.size.width - 24.0, 18.0);
+    self.layer.cornerRadius = CGRectGetHeight(self.bounds) / 2.0;
+    _highlightView.layer.cornerRadius = CGRectGetHeight(self.bounds) / 2.0;
+    _boltImageView.frame = CGRectMake(12.0, 14.0, 22.0, 28.0);
+    _titleLabel.frame = CGRectMake(42.0, 8.0, MAX(0.0, self.bounds.size.width - 54.0), 21.0);
+    _detailLabel.frame = CGRectMake(42.0, 30.0, MAX(0.0, self.bounds.size.width - 54.0), 18.0);
 }
 
 static NSString *CCMinutes(double seconds) {
@@ -400,15 +410,17 @@ static NSString *CCMinutes(double seconds) {
     if (snapshot.charging) {
         NSString *power = snapshot.watts > 0.05 ? [NSString stringWithFormat:@"%.1f W", snapshot.watts] : @"Power —";
         NSString *capacity = [NSString stringWithFormat:@"%.0f%%", snapshot.percent];
-        _titleLabel.text = [NSString stringWithFormat:@"CoolCharge  •  %@  •  %@", power, capacity];
-        NSString *eta = snapshot.etaValid ? [NSString stringWithFormat:@"Full in %@", CCMinutes(snapshot.etaSeconds)] : @"Full-time estimate learning";
-        NSString *temperature = snapshot.showTemperature && snapshot.temperature > 0.0 ? [NSString stringWithFormat:@"%.1f°C", snapshot.temperature] : @"temperature hidden";
-        NSString *session = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Started %@", CCClockString(snapshot.sessionStart)] : @"live charging";
-        _detailLabel.text = [NSString stringWithFormat:@"%@  •  %@  •  %@", eta, temperature, session];
-        self.accessibilityLabel = [NSString stringWithFormat:@"Charging at %@, %@, %@", power, capacity, eta];
+        NSString *eta = snapshot.etaValid ? [NSString stringWithFormat:@"Full in %@", CCMinutes(snapshot.etaSeconds)] : @"Learning estimate";
+        NSString *temperature = snapshot.showTemperature && snapshot.temperature > 0.0 ? [NSString stringWithFormat:@"%.1f°C", snapshot.temperature] : @"Temp hidden";
+        NSString *session = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Started %@", CCClockString(snapshot.sessionStart)] : @"Live charging";
+        _titleLabel.text = eta;
+        _detailLabel.text = [NSString stringWithFormat:@"%@  •  %@  •  %@", capacity, power, temperature];
+        _boltImageView.tintColor = UIColor.systemGreenColor;
+        self.accessibilityLabel = [NSString stringWithFormat:@"Charging at %@, %@, %@, %@", power, capacity, eta, session];
     } else {
-        _titleLabel.text = @"CoolCharge  •  Charge receipt";
-        _detailLabel.text = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Stopped %@  •  Charged %@", CCClockString(snapshot.lastSessionStop), CCDurationString(snapshot.lastSessionDuration)] : @"Charging session complete";
+        _titleLabel.text = @"Charge complete";
+        _detailLabel.text = snapshot.showSessionTimes ? [NSString stringWithFormat:@"Stopped %@  •  %@", CCClockString(snapshot.lastSessionStop), CCDurationString(snapshot.lastSessionDuration)] : @"Charging session complete";
+        _boltImageView.tintColor = UIColor.systemYellowColor;
         self.accessibilityLabel = _detailLabel.text;
     }
 }
@@ -502,44 +514,6 @@ static void CCUpdateWidgets(CCSnapshot snapshot) {
     gWidgetDisplayLink.paused = gWidgets.allObjects.count == 0;
 }
 
-static UIView *CCFindLockScreenMarker(UIView *view, NSInteger depth) {
-    if (view == nil || depth > 7) return nil;
-    NSString *name = NSStringFromClass(view.class).lowercaseString;
-    if ([name containsString:@"dashboard"] || [name containsString:@"lockscreen"] ||
-        [name containsString:@"coversheet"] || [name containsString:@"lockscreenview"]) {
-        return view;
-    }
-    for (UIView *child in view.subviews) {
-        UIView *match = CCFindLockScreenMarker(child, depth + 1);
-        if (match != nil) return match;
-    }
-    return nil;
-}
-
-static BOOL CCWindowLooksLikeLockScreen(UIWindow *window) {
-    if (window == nil || window.hidden || window.alpha < 0.01 || window.bounds.size.width < 200.0) return NO;
-    NSString *windowName = NSStringFromClass(window.class).lowercaseString;
-    NSString *controllerName = NSStringFromClass(window.rootViewController.class).lowercaseString;
-    if ([windowName containsString:@"dashboard"] || [windowName containsString:@"lockscreen"] ||
-        [windowName containsString:@"coversheet"] || [controllerName containsString:@"dashboard"] ||
-        [controllerName containsString:@"lockscreen"] || [controllerName containsString:@"coversheet"]) {
-        return YES;
-    }
-    return CCFindLockScreenMarker(window, 0) != nil;
-}
-
-static UIView *CCFindLockScreenHost(void) {
-    UIApplication *application = UIApplication.sharedApplication;
-    for (UIScene *scene in application.connectedScenes) {
-        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-        UIWindowScene *windowScene = (UIWindowScene *)scene;
-        for (UIWindow *window in windowScene.windows) {
-            if (CCWindowLooksLikeLockScreen(window)) return window;
-        }
-    }
-    return nil;
-}
-
 static void CCAttachWidgetToView(UIView *hostView) {
     if (hostView == nil) return;
     if (gWidgets == nil) gWidgets = [NSHashTable weakObjectsHashTable];
@@ -560,43 +534,70 @@ static void CCAttachWidgetToView(UIView *hostView) {
     [widget cc_restoreAfterAppearance];
 }
 
-static __weak UIView *gOverlayHost;
-static NSTimer *gOverlayScanTimer;
+typedef void (*CCViewDidMoveToWindowIMP)(id, SEL);
+typedef void (*CCViewLayoutIMP)(id, SEL);
+typedef void (*CCViewControllerAppearanceIMP)(id, SEL, BOOL);
+static CCViewDidMoveToWindowIMP gOriginalCoverSheetDidMoveToWindow;
+static CCViewLayoutIMP gOriginalCoverSheetLayoutSubviews;
+static CCViewControllerAppearanceIMP gOriginalCoverSheetViewDidAppear;
+static CCViewControllerAppearanceIMP gOriginalCoverSheetViewWillDisappear;
+typedef void (*CCMSHookMessageEx)(Class, SEL, IMP, IMP *);
 
-static void CCScanForLockScreenOverlay(void) {
-    UIView *host = CCFindLockScreenHost();
-    if (host != gOverlayHost) {
-        CCCoolChargeWidget *oldWidget = objc_getAssociatedObject(gOverlayHost, &gWidgetAssociationKey);
-        oldWidget.hidden = YES;
-        gOverlayHost = host;
-        os_log(CCLog(), "CoolCharge overlay host %{public}s", host == nil ? "absent" : NSStringFromClass(host.class).UTF8String);
-    }
-    if (host != nil) CCAttachWidgetToView(host);
-    for (CCCoolChargeWidget *widget in gWidgets.allObjects) {
-        if (!widget.hidden) [widget cc_refreshPlacement];
-    }
+static void CCHideWidgetForView(id object) {
+    CCCoolChargeWidget *widget = objc_getAssociatedObject(object, &gWidgetAssociationKey);
+    widget.hidden = YES;
 }
 
-@interface CCOverlayScannerTarget : NSObject
-@end
-
-@implementation CCOverlayScannerTarget
-- (void)cc_scan:(NSTimer *)timer {
-    (void)timer;
-    CCScanForLockScreenOverlay();
+static void HookedCoverSheetDidMoveToWindow(id self, SEL _cmd) {
+    if (gOriginalCoverSheetDidMoveToWindow != NULL) gOriginalCoverSheetDidMoveToWindow(self, _cmd);
+    UIView *view = (UIView *)self;
+    if (view.window != nil) CCAttachWidgetToView(view);
+    else CCHideWidgetForView(self);
 }
-@end
 
-static void CCStartOverlayScanner(void) {
-    if (gOverlayScanTimer != nil) return;
-    CCOverlayScannerTarget *target = [[CCOverlayScannerTarget alloc] init];
-    gOverlayScanTimer = [NSTimer timerWithTimeInterval:0.25
-                                                  target:target
-                                                selector:@selector(cc_scan:)
-                                                userInfo:nil
-                                                 repeats:YES];
-    [[NSRunLoop mainRunLoop] addTimer:gOverlayScanTimer forMode:NSRunLoopCommonModes];
-    CCScanForLockScreenOverlay();
+static void HookedCoverSheetLayoutSubviews(id self, SEL _cmd) {
+    if (gOriginalCoverSheetLayoutSubviews != NULL) gOriginalCoverSheetLayoutSubviews(self, _cmd);
+    UIView *view = (UIView *)self;
+    if (view.window != nil) CCAttachWidgetToView(view);
+}
+
+static void HookedCoverSheetViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    if (gOriginalCoverSheetViewDidAppear != NULL) gOriginalCoverSheetViewDidAppear(self, _cmd, animated);
+    UIView *view = [(UIViewController *)self view];
+    Class coverSheetClass = objc_getClass("CSCoverSheetView");
+    if (view != nil && (coverSheetClass == Nil || [view isKindOfClass:coverSheetClass])) CCAttachWidgetToView(view);
+}
+
+static void HookedCoverSheetViewWillDisappear(id self, SEL _cmd, BOOL animated) {
+    if (gOriginalCoverSheetViewWillDisappear != NULL) gOriginalCoverSheetViewWillDisappear(self, _cmd, animated);
+    UIView *view = [(UIViewController *)self view];
+    if (view != nil) CCHideWidgetForView(view);
+}
+
+static void CCInstallCoverSheetHooks(void) {
+    CCMSHookMessageEx hooker = (CCMSHookMessageEx)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
+    if (hooker == NULL) {
+        os_log_error(CCLog(), "CoolCharge could not find MSHookMessageEx; Cover Sheet overlay disabled");
+        return;
+    }
+
+    Class coverSheet = objc_getClass("CSCoverSheetView");
+    if (coverSheet != Nil) {
+        hooker(coverSheet, @selector(didMoveToWindow), (IMP)HookedCoverSheetDidMoveToWindow, (IMP *)&gOriginalCoverSheetDidMoveToWindow);
+        hooker(coverSheet, @selector(layoutSubviews), (IMP)HookedCoverSheetLayoutSubviews, (IMP *)&gOriginalCoverSheetLayoutSubviews);
+        os_log(CCLog(), "CoolCharge installed CSCoverSheetView lifecycle hooks");
+    } else {
+        os_log_error(CCLog(), "CoolCharge could not find CSCoverSheetView");
+    }
+
+    Class controller = objc_getClass("CSCoverSheetViewController");
+    if (controller != Nil) {
+        hooker(controller, @selector(viewDidAppear:), (IMP)HookedCoverSheetViewDidAppear, (IMP *)&gOriginalCoverSheetViewDidAppear);
+        hooker(controller, @selector(viewWillDisappear:), (IMP)HookedCoverSheetViewWillDisappear, (IMP *)&gOriginalCoverSheetViewWillDisappear);
+        os_log(CCLog(), "CoolCharge installed CSCoverSheetViewController lifecycle hooks");
+    } else {
+        os_log_error(CCLog(), "CoolCharge could not find CSCoverSheetViewController");
+    }
 }
 
 static int gSettingsNotificationToken = 0;
@@ -620,10 +621,11 @@ static void CCStartTelemetry(void) {
 
 __attribute__((constructor)) static void CoolChargeInitialize(void) {
     os_log_error(CCLog(), "ApelinLoaded %{public}s in %{public}s", APELIN_BUILD_ID, getprogname());
+    NSLog(@"ApelinLoaded %s in %s", APELIN_BUILD_ID, getprogname());
     if (objc_getClass("SpringBoard") == Nil) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         gWidgets = [NSHashTable weakObjectsHashTable];
-        CCStartOverlayScanner();
+        CCInstallCoverSheetHooks();
     });
     CCStartTelemetry();
 }
